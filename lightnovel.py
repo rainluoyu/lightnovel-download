@@ -8,7 +8,7 @@ def parse_args():
     """Parse input arguments."""
     parser = argparse.ArgumentParser(description='config')
     parser.add_argument('--book_no', default='0000', type=str)
-    parser.add_argument('--volume_no', default='1', type=int)
+    parser.add_argument('--volume_no', default='1', type=str)
     parser.add_argument('--no_input', default=False, type=bool)
     args = parser.parse_args()
     return args

@@ -23,6 +23,7 @@ class Editer(object):
     def __init__(self, root_path, book_no='0000', volume_no=1):
         self.url_head = 'https://www.wenku8.net' 
         self.header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.67 Safari/537.36 Edg/87.0.664.47', 'referer': self.url_head}
+        self.session = requests.Session()
 
         self.main_page = f'{self.url_head}/book/{book_no}.htm'
         self.color_chap_name = '插图'
@@ -39,7 +40,7 @@ class Editer(object):
     
             
         self.img_url_map = dict()
-        self.volume_no = volume_no
+        self.volume_no = int(volume_no)
 
         self.epub_path = root_path
         self.temp_path = (os.path.join(self.epub_path,  'temp_'+ check_chars(self.title) + '_' + str(self.volume_no)))
@@ -56,15 +57,17 @@ class Editer(object):
     def get_html(self, url, is_gbk=False):
         time.sleep(1)
         while True:
-            req = requests.get(url, headers=self.header)
-            if is_gbk:
-                req.encoding = 'GBK'       #这里是网页的编码转换，根据网页的实际需要进行修改，经测试这个编码没有问题
-            if '<title>Access denied | www.wenku8.net used Cloudflare to restrict access</title>' in req.text:
+            try:
+                req = self.session.get(url, headers=self.header, timeout=20)
+                if is_gbk:
+                    req.encoding = 'GBK'       #这里是网页的编码转换，根据网页的实际需要进行修改，经测试这个编码没有问题
+                if req.status_code == 429 or 'Access denied' in req.text:
+                    time.sleep(3)
+                    continue
+                req.raise_for_status()
+                return req.text
+            except requests.RequestException:
                 time.sleep(3)
-            else:
-                break
-        req = req.text
-        return req
     
     def get_html_img(self, url, is_buffer=False):
         if is_buffer:
@@ -74,10 +77,11 @@ class Editer(object):
             return self.html_buffer[url]
         while True:
             try:
-                req=requests.get(url, headers=self.header)
+                req = self.session.get(url, headers=self.header, timeout=20)
+                req.raise_for_status()
                 break
-            except Exception as e:
-                pass
+            except requests.RequestException:
+                time.sleep(1)
         lock.acquire()
         self.html_buffer[url] = req.content
         lock.release()
@@ -134,25 +138,42 @@ class Editer(object):
     
     def get_chap_text(self, url, chap_name, is_color=False):
         print(chap_name)
-        content_html = self.get_html(url, is_gbk=True)
-        bf = BeautifulSoup(content_html, 'html.parser')
-        text_with_head = bf.find('div', {'id': 'content'}) 
-        text_chap = ''
-        if is_color:
-            img_url_htmls = text_with_head.find_all('img', {'class': 'imagecontent'})
-            img_urls = [img_url_html.get('src') for img_url_html in img_url_htmls]
-            for img_url in img_urls:
-                self.img_url_map[img_url] = str(len(self.img_url_map)).zfill(2)
-                img_symbol = f'[img:{self.img_url_map[img_url]}]'
-                if '00' not in img_symbol:
-                    text_chap += (img_symbol+'\n')
-        else:
+        for _ in range(3):
+            content_html = self.get_html(url, is_gbk=True)
+            bf = BeautifulSoup(content_html, 'html.parser')
+            text_with_head = bf.find('div', {'id': 'content'})
+            text_chap = ''
+
+            if is_color:
+                if text_with_head is not None:
+                    img_url_htmls = text_with_head.find_all('img', {'class': 'imagecontent'})
+                else:
+                    img_url_htmls = bf.find_all('img', {'class': 'imagecontent'})
+
+                if len(img_url_htmls) == 0:
+                    time.sleep(1)
+                    continue
+
+                img_urls = [img_url_html.get('src') for img_url_html in img_url_htmls if img_url_html.get('src')]
+                for img_url in img_urls:
+                    self.img_url_map[img_url] = str(len(self.img_url_map)).zfill(2)
+                    img_symbol = f'[img:{self.img_url_map[img_url]}]'
+                    if '00' not in img_symbol:
+                        text_chap += (img_symbol+'\n')
+                return text_chap
+
+            if text_with_head is None:
+                time.sleep(1)
+                continue
+
             text_html = str(text_with_head)
             for line in text_html.split('\n'):
                 if not line.startswith('<ul id="contentdp">') and not line.startswith('<br/>'):
                     text_chap += (line+'\n')
             text_chap = BeautifulSoup(text_chap, 'html.parser').get_text()
-        return text_chap
+            return text_chap
+
+        raise ValueError(f'章节内容解析失败：{chap_name} ({url})')
     
     def get_text(self):
         self.make_folder()   
